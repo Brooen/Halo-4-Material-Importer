@@ -1,4 +1,47 @@
+import bpy
 import struct
+
+def clear_material():
+    """Removes the existing material from the active object."""
+    obj = bpy.context.object
+    if obj and obj.type == 'MESH':
+        obj.active_material = None
+
+def import_shader(shader_name):
+    """Finds the shader node group in Blender and applies it to the material."""
+    # Check if the shader node group exists in Blender
+    shader_group_name = f"H5 material_shader: {shader_name}"
+    if shader_group_name not in bpy.data.node_groups:
+        print(f"Shader node group '{shader_group_name}' not found.")
+        return None
+
+    # Create a new material
+    mat = bpy.data.materials.new(name=shader_name)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+
+    # Clear all nodes
+    for node in nodes:
+        nodes.remove(node)
+
+    # Create new nodes
+    output_node = nodes.new(type="ShaderNodeOutputMaterial")
+    output_node.location = (400, 0)
+
+    shader_node = nodes.new(type="ShaderNodeGroup")
+    shader_node.node_tree = bpy.data.node_groups[shader_group_name]
+    shader_node.location = (0, 0)
+
+    # Connect Shader output to Material Output Surface
+    mat.node_tree.links.new(shader_node.outputs["Shader"], output_node.inputs["Surface"])
+
+    return mat
+
+def assign_material_to_active_object(material):
+    """Assigns the given material to the active object."""
+    obj = bpy.context.object
+    if obj and obj.type == 'MESH':
+        obj.active_material = material
 
 class MaterialParameter:
     BITMAP = 0
@@ -40,6 +83,8 @@ def clean_file_path(filepath: str) -> str:
     """Removes the first four characters from the file path."""
     return filepath[4:] if len(filepath) > 4 else filepath  # Ensures it doesn't break on short strings
 
+import struct
+
 def read_patterned_file(filepath):
     with open(filepath, 'rb') as f:
         f.seek(176)
@@ -49,7 +94,18 @@ def read_patterned_file(filepath):
             size = struct.unpack('<I', f.read(4))[0]
             f.seek(size, 1)
 
-        f.seek(92, 1)
+        # First, try moving 100 bytes forward and checking for 'tsgt'
+        f.seek(96, 1)
+        pos_100 = f.tell()
+        if f.read(4) != b'\x74\x73\x67\x74':  # 'tsgt' in hex
+            # If not found, try 104 bytes forward instead
+            f.seek(4, 1)
+
+        # Move back 8 bytes before 'tsgt'
+        f.seek(-12, 1)       
+
+                
+        print(f"Current Offset: 0x{f.tell():X}")
         blend_mode = struct.unpack('<B', f.read(1))[0]
         f.seek(3, 1)
         tsp = struct.unpack('<I', f.read(4))[0]
@@ -59,13 +115,14 @@ def read_patterned_file(filepath):
         f.seek(12, 1)
         parameter_count = struct.unpack('<I', f.read(4))[0]
         f.seek(4, 1)
-        
-        # Print results
+
+       # Print results
         print(f"Blend Mode: {BlendModes.VALUES[blend_mode] if blend_mode < len(BlendModes.VALUES) else 'Unknown'}")
         print(f"TSP: {TransparentShadowPolicies.VALUES[tsp] if tsp < len(TransparentShadowPolicies.VALUES) else 'Unknown'}")
         print(f"Shader Length: {shader_length}")
         print(f"Shader: {get_shader_name(shader)}")
-        print(f"Parameter Count: {parameter_count}\n")
+        print(f"Parameter Count: {parameter_count}")
+
         
         parameters = []
         
@@ -140,4 +197,4 @@ def read_patterned_file(filepath):
         print("\n\n".join(["\n".join(param['data']) for param in parameters]))
 
 # Example usage
-read_patterned_file("F:\\SteamLibrary\\steamapps\\common\\H4EK\\tags\\levels\\dlc\\materials\\ca_port\\ca_port_emissive_lights.material")
+#read_patterned_file("F:\\SteamLibrary\\steamapps\\common\\H4EK\\tags\\levels\\dlc\\materials\\ca_port\\ca_port_emissive_lights.material")
