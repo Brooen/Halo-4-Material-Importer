@@ -1,6 +1,8 @@
 import os
 import struct
 
+# takes bitmap files and extracts their curves, then puts in into a database with the filepath
+
 def process_bitmap_files(directory):
     output_file = os.path.join(directory, "bitmap.db")
     with open(output_file, "wb") as db:
