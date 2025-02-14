@@ -49,7 +49,16 @@ def read_patterned_file(filepath):
             size = struct.unpack('<I', f.read(4))[0]
             f.seek(size, 1)
 
-        f.seek(92, 1)
+        # First, try moving 100 bytes forward and checking for 'tsgt'
+        f.seek(96, 1)
+        pos_100 = f.tell()
+        if f.read(4) != b'\x74\x73\x67\x74':  # 'tsgt' in hex
+            # If not found, try 104 bytes forward instead
+            f.seek(4, 1)
+
+        # Move back 8 bytes before 'tsgt'
+        f.seek(-12, 1)   
+        
         blend_mode = struct.unpack('<B', f.read(1))[0]
         f.seek(3, 1)
         tsp = struct.unpack('<I', f.read(4))[0]

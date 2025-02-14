@@ -8,6 +8,7 @@ bl_info = {
 import bpy
 import os
 import importlib.util
+import subprocess
 from bpy.types import Operator, AddonPreferences, Panel
 from bpy.props import StringProperty
 
@@ -16,7 +17,7 @@ class FILE_OT_run_material_importer(Operator):
     bl_label = "Run Material Importer"
 
     def execute(self, context):
-        prefs = context.preferences.addons[__name__].preferences
+        prefs = context.preferences.addons["Halo-4-Material-Importer"].preferences
         addon_directory = os.path.dirname(__file__)  # Define addon_directory
 
         # Ensure Shaders node group is loaded
@@ -47,24 +48,59 @@ class FILE_OT_run_material_importer(Operator):
         # Iterate over selected objects and process materials
         processed_materials = set()
 
+        # Get h4ek_base_path from preferences
+        h4ek_base_path = prefs.h4ek_base_path  
+
         for obj in context.selected_objects:
             if not obj.data or not hasattr(obj.data, "materials"):
                 continue  # Skip objects without materials
 
             for mat in obj.data.materials:
                 if mat and mat.get("tag_name") and mat.name not in processed_materials:
-                    tag_name = os.path.join(prefs.tag_base_path, mat["tag_name"] + ".material")  # Get the material tag name from custom properties
+                    tag_name = os.path.join(h4ek_base_path, "tags", mat["tag_name"] + ".material")
                     self.report({'INFO'}, f"Processing material: {mat.name} with tag_name: {tag_name}")
 
+                    # Get h4ek_base_path from preferences
+                    h4ek_base_path = prefs.h4ek_base_path  
+
                     try:
-                        material_importer.read_patterned_file(tag_name)  # Run the parameter reader
+                        # Pass h4ek_base_path as an additional argument
+                        material_importer.process_material(tag_name, mat, h4ek_base_path)
                     except Exception as e:
                         self.report({'ERROR'}, f"Error processing {tag_name}: {str(e)}")
 
-                    processed_materials.add(mat.name)  # Avoid duplicate processing
+                    except Exception as e:
+                        self.report({'ERROR'}, f"Error processing {tag_name}: {str(e)}")
+
+                    processed_materials.add(mat.name)
+
 
         self.report({'INFO'}, "Materials processed successfully")
         return {'FINISHED'}
+
+
+class FILE_OT_export_all_bitmaps(Operator):
+    bl_idname = "file.export_all_bitmaps"
+    bl_label = "Export All Bitmaps"
+
+    def execute(self, context):
+        prefs = context.preferences.addons["Halo-4-Material-Importer"].preferences
+        addon_directory = os.path.dirname(__file__)  # Get the addon directory
+        script_path = os.path.join(addon_directory, "export_all_bitmaps.py")
+
+        if not os.path.exists(script_path):
+            self.report({'ERROR'}, "Export script not found.")
+            return {'CANCELLED'}
+
+        # Run the script and pass h4ek_base_path
+        try:
+            subprocess.run(["python", script_path, prefs.h4ek_base_path, addon_directory], check=True)
+            self.report({'INFO'}, "Export All Bitmaps executed successfully.")
+        except subprocess.CalledProcessError as e:
+            self.report({'ERROR'}, f"Error executing export script: {str(e)}")
+
+        return {'FINISHED'}
+
 
 
 class MATERIAL_IMPORTER_PT_panel(Panel):
@@ -83,19 +119,33 @@ class MATERIAL_IMPORTER_PT_panel(Panel):
 class MaterialImporterPreferences(AddonPreferences):
     bl_idname = __name__
 
-    tag_base_path: StringProperty(
-        name="Tag Base Path",
-        subtype='DIR_PATH'
+    h4ek_base_path: StringProperty(
+        name="H4EK Base Path",
+        subtype='DIR_PATH',
+        description="Set the base path for H4EK files",  # Alt text (tooltip)
+        default="C:\\Program Files (x86)\\Steam\\steamapps\\common\\H4EK\\"  # Placeholder (grayed-out text)
     )
 
     def draw(self, context):
         layout = self.layout
         layout.label(text="Material Importer Addon Preferences")
-        layout.prop(self, "tag_base_path")
+        layout.prop(self, "h4ek_base_path", text="Base Path")  # Label for the input box
+        # Export button with tooltip
+        export_btn = layout.operator(
+            "file.export_all_bitmaps",
+            text="Export All Bitmaps",
+            icon="EXPORT"
+        )
+        export_btn.bl_description = "Export all bitmaps from the H4EK base path using tool.exe (converts everthing to dds in the images folder in H4EK (#GB)"  # Tooltip
 
 
 # Register classes
-classes = [FILE_OT_run_material_importer, MATERIAL_IMPORTER_PT_panel, MaterialImporterPreferences]
+classes = [
+    FILE_OT_run_material_importer,
+    FILE_OT_export_all_bitmaps,
+    MATERIAL_IMPORTER_PT_panel,
+    MaterialImporterPreferences
+]
 
 def register():
     for cls in classes:
