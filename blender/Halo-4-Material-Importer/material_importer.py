@@ -43,22 +43,26 @@ def clean_file_path(filepath: str) -> str:
     """Removes the first four characters from the file path."""
     return filepath[4:] if len(filepath) > 4 else filepath  # Ensures it doesn't break on short strings
 
-import struct
 
 def read_patterned_file(filepath, material):
     with open(filepath, 'rb') as f:
-        f.seek(176)
+        f.seek(176)  # Start at byte 176
 
+        # Skip through 12 blocks
         for _ in range(12):
-            f.seek(8, 1)
-            size = struct.unpack('<I', f.read(4))[0]
-            f.seek(size, 1)
+            f.seek(8, 1)  # Skip 8 bytes
+            size = struct.unpack('<I', f.read(4))[0]  # Read size
+            f.seek(size, 1)  # Skip size bytes
 
-        f.seek(96, 1)
-        if f.read(4) != b'\x74\x73\x67\x74':  # 'tsgt' in hex
-            f.seek(4, 1)
+        start_offset = f.tell()  # Get the position after skipping blocks
 
-        f.seek(-12, 1)
+        # Search for 'tsgt' starting from the current position
+        for _ in range(100):  # Try three times (88, 92, 96)
+            if f.read(4) == b'\x74\x73\x67\x74':  # 'tsgt' in hex
+                break  # Stop looping if found
+            
+
+        f.seek(-12, 1)  # Move back to align properly
 
         print(f"Current Offset: 0x{f.tell():X}")
         blend_mode = struct.unpack('<B', f.read(1))[0]
@@ -153,17 +157,104 @@ def read_patterned_file(filepath, material):
 
         print("\n\n".join(["\n".join(param['data']) for param in parameters]))
         
+        blend_value = 1.0
+        if blend_mode < len(BlendModes.VALUES):
+            mode = BlendModes.VALUES[blend_mode]
+            blend_value = 0.0 if mode == "Opaque" else 1.0 if mode == "Alpha_Blend" else 0.5 if mode == "Additive" else 1.0
+        
+        tsp_value = 1.0
+        if tsp < len(TransparentShadowPolicies.VALUES):
+            tsp_mode = TransparentShadowPolicies.VALUES[tsp]
+            tsp_value = 0.0 if tsp_mode in ["None", "Render_as_decal"] else 1.0
+
+        parameters.append({"name": "Blend Mode", "type": "blend_mode", "value": blend_value, "data": []})
+        parameters.append({"name": "TSP", "type": "tsp", "value": tsp_value, "data": []})
+        
         # Append Shader Name, Blend Mode, and TSP at the end
         parameters.append({"name": "Shader", "type": "shader", "value": get_shader_name(shader), "data": []})
-        parameters.append({"name": "Blend Mode", "type": "blend_mode", "value": BlendModes.VALUES[blend_mode] if blend_mode < len(BlendModes.VALUES) else "Unknown", "data": []})
-        parameters.append({"name": "TSP", "type": "tsp", "value": TransparentShadowPolicies.VALUES[tsp] if tsp < len(TransparentShadowPolicies.VALUES) else "Unknown", "data": []})
             
         return parameters  # Return structured data
 
-        
+def get_curve_from_db(texture_path, bitmap_index, all_paths):
+    """
+    Retrieves the curve value for the given texture path using a preloaded index.
+    If not found, tries an adjusted version missing the first character.
+    """
+    search_path = f"{texture_path}.bitmap"  # Normal expected path
+
+    if search_path in bitmap_index:
+        curve_value = bitmap_index[search_path]
+        print(f"✅ Found curve for {texture_path}: {curve_value}")
+        return curve_value
+
+    # If not found, print the 1000th bitmap entry (if exists)
+    if len(all_paths) > 1000:
+        print(f"⚠ DEBUG: 1000th Entry in bitmap.db: {all_paths[999]}")
+    else:
+        print(f"⚠ DEBUG: bitmap.db has only {len(all_paths)} entries, no 1000th entry.")
+
+    print(f"⚠ Curve for {texture_path} not found. Using default: 1")
+    return 1  # Default to 1 if not found
 
 
-def process_material(filepath, material, h4ek_base_path):
+def load_bitmap_db(addon_directory):
+    """
+    Loads the entire bitmap.db into a dictionary for fast lookups.
+    """
+    db_path = os.path.join(addon_directory, "bitmap.db")
+    curve_mapping = {
+        0x00: 1,
+        0x01: 1.95,
+        0x02: 2,
+        0x03: 1,
+        0x04: 1,
+        0x05: 2.2
+    }
+
+    bitmap_index = {}  # Store path -> curve value
+    all_paths = []  # Keep track of all paths for debugging (even if not used)
+
+    try:
+        with open(db_path, "rb") as f:
+            while True:
+                path_bytes = bytearray()
+                
+                # Read path until null terminator (\x00)
+                while True:
+                    byte = f.read(1)
+                    if not byte or byte == b"\x00":
+                        break
+                    path_bytes.append(byte[0])
+
+                if not path_bytes:
+                    break  # Stop if we reach the end of the file
+
+                # Convert bytes to string
+                raw_path = path_bytes.decode("ascii").strip()
+                all_paths.append(raw_path)  # Store for debugging
+
+                # Read u8 curve identifier
+                curve_id_bytes = f.read(1)
+                if len(curve_id_bytes) == 0:
+                    break  # Stop if EOF
+
+                curve_id = struct.unpack("<B", curve_id_bytes)[0]  # Read as unsigned byte
+
+                # Store in dictionary for instant lookup
+                bitmap_index[raw_path] = curve_mapping.get(curve_id, 1)  # Default to 1 if not found
+
+        return bitmap_index, all_paths  # ✅ Return two values
+
+    except FileNotFoundError:
+        print(f"⚠ WARNING: {db_path} not found.")
+        return {}, []
+    except Exception as e:
+        print(f"❌ ERROR reading {db_path}: {e}")
+        return {}, []
+
+
+
+def process_material(filepath, material, h4ek_base_path, addon_directory):
 
     """
     Reads the material file, extracts parameters, and applies them to a shader in Blender.
@@ -281,12 +372,12 @@ def process_material(filepath, material, h4ek_base_path):
         print(f" - {key}: {value}")
 
     # Apply shader in Blender
-    create_shader_in_blender(shader_name, structured_parameters, material, h4ek_base_path)
+    create_shader_in_blender(shader_name, structured_parameters, material, h4ek_base_path, addon_directory)
 
     print(f"Shader '{shader_name}' successfully applied to '{material.name}'\n")
 
 
-def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path):
+def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, addon_directory):
     """Creates or updates a shader node group in Blender and applies it to the given material."""
     # Ensure the node group exists
     node_group_name = f"{shader_name}"
@@ -319,6 +410,15 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path):
 
     print(f"Setting up shader '{shader_name}' with parameters: {parameters}")
     
+    blend_mode = float(parameters.get("Blend Mode", {}).get("value", 1.0))
+    tsp_value = float(parameters.get("TSP", {}).get("value", 1.0))
+    
+    if "0 Opaque, .5 Additive, 1 Alpha Blend" in group_node.inputs.keys():
+        group_node.inputs["0 Opaque, .5 Additive, 1 Alpha Blend"].default_value = float(blend_mode)
+    
+    if "Cast shadows? [0-1]" in group_node.inputs.keys():
+        group_node.inputs["Cast shadows? [0-1]"].default_value = int(tsp_value)
+    
     # Set the initial positions for nodes
     x_offset = -200
     y_offset = 0
@@ -334,7 +434,7 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path):
             texture_path = param_data['value']
             
             # Use h4ek_base_path to form the correct texture path
-            new_texture_path = os.path.join(h4ek_base_path, "images", f"{os.path.dirname(texture_path)}/{os.path.basename(texture_path)}_00_00.dds")
+            new_texture_path = os.path.join(h4ek_base_path, "images", f"{(texture_path)}_00_00.dds") #00_00 is for arrays, some have 00_01 and stuff like that
 
 
 
@@ -410,6 +510,23 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path):
                 print(f"Connected texture node color output to group node input '{param_name}'.")
             alpha_input_name = f"{param_name}_alpha"
             print(f"Checking for alpha input '{alpha_input_name}' in node group...")
+            curve_input_name = f"{param_name}_curve"
+            if curve_input_name in group_node.inputs.keys():
+                print(f"'{curve_input_name}' exists in group node inputs. Fetching curve value...")
+
+                # Load bitmap.db once and store the index
+                bitmap_index, all_paths = load_bitmap_db(addon_directory)
+
+                # Use the preloaded index for fast lookups
+                curve_value = get_curve_from_db(texture_path, bitmap_index, all_paths)
+
+                # Set the curve value
+                group_node.inputs[curve_input_name].default_value = curve_value
+                print(f"✅ Set curve parameter '{curve_input_name}' to {curve_value}")
+
+            else:
+                print(f"Curve input '{curve_input_name}' not found in node group.")
+            
             if alpha_input_name in group_node.inputs.keys():
                 print(f"'{alpha_input_name}' exists in group node inputs. Connecting alpha...")
                 links.new(tex_node.outputs['Alpha'], group_node.inputs[alpha_input_name])

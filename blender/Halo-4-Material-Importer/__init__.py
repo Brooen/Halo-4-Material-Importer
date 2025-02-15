@@ -65,7 +65,7 @@ class FILE_OT_run_material_importer(Operator):
 
                     try:
                         # Pass h4ek_base_path as an additional argument
-                        material_importer.process_material(tag_name, mat, h4ek_base_path)
+                        material_importer.process_material(tag_name, mat, h4ek_base_path, addon_directory)
                     except Exception as e:
                         self.report({'ERROR'}, f"Error processing {tag_name}: {str(e)}")
 
@@ -80,6 +80,9 @@ class FILE_OT_run_material_importer(Operator):
 
 
 class FILE_OT_export_all_bitmaps(Operator):
+    """Export all bitmaps from the H4EK base path using tool.exe 
+    (converts everything to DDS in the images folder in H4EK (25 GB))"""
+    
     bl_idname = "file.export_all_bitmaps"
     bl_label = "Export All Bitmaps"
 
@@ -100,6 +103,7 @@ class FILE_OT_export_all_bitmaps(Operator):
             self.report({'ERROR'}, f"Error executing export script: {str(e)}")
 
         return {'FINISHED'}
+
 
 
 
@@ -136,9 +140,7 @@ class MaterialImporterPreferences(AddonPreferences):
             text="Export All Bitmaps",
             icon="EXPORT"
         )
-        export_btn.bl_description = "Export all bitmaps from the H4EK base path using tool.exe (converts everthing to dds in the images folder in H4EK (#GB)"  # Tooltip
-
-
+ 
 # Register classes
 classes = [
     FILE_OT_run_material_importer,
