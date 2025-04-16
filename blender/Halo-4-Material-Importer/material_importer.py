@@ -413,8 +413,8 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
     blend_mode = float(parameters.get("Blend Mode", {}).get("value", 1.0))
     tsp_value = float(parameters.get("TSP", {}).get("value", 1.0))
     
-    if "0 Opaque, .5 Additive, 1 Alpha Blend" in group_node.inputs.keys():
-        group_node.inputs["0 Opaque, .5 Additive, 1 Alpha Blend"].default_value = float(blend_mode)
+    if "Blend Mode [0 Opaque, .5 Additive, 1 Alpha Blend]" in group_node.inputs.keys():
+        group_node.inputs["Blend Mode [0 Opaque, .5 Additive, 1 Alpha Blend]"].default_value = float(blend_mode)
     
     if "Cast shadows? [0-1]" in group_node.inputs.keys():
         group_node.inputs["Cast shadows? [0-1]"].default_value = int(tsp_value)
@@ -434,9 +434,12 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
             texture_path = param_data['value']
             
             # Use h4ek_base_path to form the correct texture path
-            new_texture_path = os.path.join(h4ek_base_path, "images", f"{(texture_path)}_00_00.dds") #00_00 is for arrays, some have 00_01 and stuff like that
+            new_texture_path = os.path.join(h4ek_base_path, "images", f"{(texture_path)}_00_00.dds") 
 
-
+            # Check if the file exists before attempting to load it
+            if not os.path.exists(new_texture_path):
+                print(f"⚠ Skipping missing texture: {new_texture_path}")
+                continue  # Skip this texture and move to the next one
 
             # Check if the image is already loaded in Blender
             image_name = os.path.basename(new_texture_path)
@@ -448,7 +451,7 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
                 try:
                     image = bpy.data.images.load(new_texture_path)
                 except RuntimeError:
-                    print(f"Failed to load image: {new_texture_path}. Skipping this texture.")
+                    print(f"❌ Failed to load image: {new_texture_path}. Skipping this texture.")
                     continue  # Skip to the next parameter if the image fails to load
 
             # Create the texture node
@@ -458,7 +461,8 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
             tex_node.image = image
             tex_node.location = (x_offset, y_offset)
             y_offset += y_step  # Move down for the next node
-            print(f"Texture node '{tex_node.name}' created/updated at location {tex_node.location}.")
+            print(f"✅ Texture node '{tex_node.name}' created/updated at location {tex_node.location}.")
+
 
 
             # Set the curve (color space) if provided
