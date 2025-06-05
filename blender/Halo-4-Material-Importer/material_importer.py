@@ -59,29 +59,30 @@ def clean_file_path(filepath: str) -> str:
 
 # ── helper: reuse textures / bools that already exist ─────────────────
 def _link_existing_normals(mat, vec_node, shader_group):
-    nt = mat.node_tree
+    nt   = mat.node_tree
     lnks = nt.links
 
+    # -------------------------------------------------------------
     # 1. normal_map  (bitmap)
-    if "normal_map" in shader_group.inputs and shader_group.inputs["normal_map"].is_linked:
+    if shader_group.inputs.get("normal_map") and shader_group.inputs["normal_map"].is_linked:
         src = shader_group.inputs["normal_map"].links[0].from_node
         if "normal_map" in vec_node.inputs and not vec_node.inputs["normal_map"].is_linked:
             lnks.new(src.outputs["Color"], vec_node.inputs["normal_map"])
 
     # 2. normal_detail_map  (bitmap)
-    if ("normal_detail_map" in shader_group.inputs
-            and shader_group.inputs["normal_detail_map"].is_linked):
+    if shader_group.inputs.get("normal_detail_map") and shader_group.inputs["normal_detail_map"].is_linked:
         src = shader_group.inputs["normal_detail_map"].links[0].from_node
-        if ("normal_detail_map" in vec_node.inputs
-                and not vec_node.inputs["normal_detail_map"].is_linked):
+        if "normal_detail_map" in vec_node.inputs and not vec_node.inputs["normal_detail_map"].is_linked:
             lnks.new(src.outputs["Color"], vec_node.inputs["normal_detail_map"])
 
     # 3. detail_normals  (boolean)
-    if ("detail_normals" in shader_group.inputs
-            and "detail_normals" in vec_node.inputs):
-        vec_node.inputs["detail_normals"].default_value = (
-            shader_group.inputs["detail_normals"].default_value
-        )
+    if "detail_normals" in shader_group.inputs and "detail_normals" in vec_node.inputs:
+        vec_node.inputs["detail_normals"].default_value = shader_group.inputs["detail_normals"].default_value
+
+    # 4. reflection_normal  (float)  
+    if "reflection_normal" in shader_group.inputs and "reflection_normal" in vec_node.inputs:
+        vec_node.inputs["reflection_normal"].default_value = shader_group.inputs["reflection_normal"].default_value
+
 
 def read_patterned_file(filepath, material):
     with open(filepath, 'rb') as f:
@@ -726,9 +727,21 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
 
 
         elif param_data['type'] == 'real':
+            # --- existing code that feeds the main shader ---
             if param_name in group_node.inputs.keys():
-                group_node.inputs[param_name].default_value = param_data['value']
-                print(f"Set real parameter '{param_name}' to {param_data['value']}")
+                group_node.inputs[param_name].default_value = float(param_data['value'])
+
+            # --- NEW: pipe reflection_normal into the vector node ---
+            if param_name == "reflection_normal":
+                vec_node = next(
+                    (n for n in material.node_tree.nodes
+                     if n.type == 'GROUP'
+                     and n.node_tree
+                     and n.node_tree.name == "Reflection Map vector"),
+                    None
+                )
+                if vec_node and "reflection_normal" in vec_node.inputs:
+                    vec_node.inputs["reflection_normal"].default_value = float(param_data['value'])
 
         elif param_data['type'] == 'boolean':
             if param_name in group_node.inputs.keys():
