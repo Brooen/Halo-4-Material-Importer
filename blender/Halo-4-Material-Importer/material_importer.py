@@ -457,8 +457,28 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
     if "Blend Mode [0 Opaque, .5 Additive, 1 Alpha Blend]" in group_node.inputs.keys():
         group_node.inputs["Blend Mode [0 Opaque, .5 Additive, 1 Alpha Blend]"].default_value = float(blend_mode)
     
-    if "Cast shadows? [0-1]" in group_node.inputs.keys():
-        group_node.inputs["Cast shadows? [0-1]"].default_value = int(tsp_value)
+    if "Cast shadows? [0-1]" in group_node.inputs:
+
+        # `blend_mode` should already hold the string for this material
+        # e.g. 'opaque', 'alpha_test', 'transparent', …
+        if blend_mode == "opaque":
+            # keep the value coming from the TSP (0 or 1)
+            group_node.inputs["Cast shadows? [0-1]"].default_value = int(tsp_value)
+        else:
+            # non-opaque materials always cast shadows
+            group_node.inputs["Cast shadows? [0-1]"].default_value = 1
+            
+    if "Show backfaces? [0-1]" in group_node.inputs:
+
+        # `blend_mode` should already hold the string for this material
+        # e.g. 'opaque', 'alpha_test', 'transparent', …
+        if blend_mode == "opaque":
+            # keep the value coming from the TSP (0 or 1)
+            group_node.inputs["Show backfaces? [0-1]"].default_value = int(tsp_value)
+        else:
+            # non-opaque materials always cast shadows
+            group_node.inputs["Show backfaces? [0-1]"].default_value = 1
+
     
     # Set the initial positions for nodes
     x_offset = -200

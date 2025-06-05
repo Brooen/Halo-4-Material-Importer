@@ -13,7 +13,7 @@ from bpy.types import Operator, AddonPreferences, Panel
 from bpy.props import StringProperty
 
 class FILE_OT_run_material_importer(Operator):
-    bl_idname = "file.run_material_importer"
+    bl_idname = "file.run_h4_material_importer"
     bl_label = "Run Material Importer"
 
     def execute(self, context):
@@ -117,7 +117,7 @@ class MATERIAL_IMPORTER_PT_panel(Panel):
 
     def draw(self, context):
         layout = self.layout
-        layout.operator("file.run_material_importer")
+        layout.operator("file.run_h4_material_importer")
 
 
 class MaterialImporterPreferences(AddonPreferences):
