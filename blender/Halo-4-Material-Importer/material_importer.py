@@ -1,6 +1,20 @@
 import bpy
 import struct
 import os
+# ───────── Cubemap helper import (works in every load context) ─────────
+try:
+    # 1) Normal package-relative import (when __package__ is set)
+    from . import cubemap_to_equirect as c2e
+except ImportError:
+    # 2) Fallback – load cubemap_to_equirect.py from the same folder
+    import importlib.util, sys, os as _os
+    _mod_path = _os.path.join(_os.path.dirname(__file__), "cubemap_to_equirect.py")
+    spec = importlib.util.spec_from_file_location("cubemap_to_equirect", _mod_path)
+    c2e = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(c2e)
+    sys.modules["cubemap_to_equirect"] = c2e   # optional: so others can import it
+# -----------------------------------------------------------------------
+
 
 
 class MaterialParameter:
@@ -43,6 +57,31 @@ def clean_file_path(filepath: str) -> str:
     """Removes the first four characters from the file path."""
     return filepath[4:] if len(filepath) > 4 else filepath  # Ensures it doesn't break on short strings
 
+# ── helper: reuse textures / bools that already exist ─────────────────
+def _link_existing_normals(mat, vec_node, shader_group):
+    nt = mat.node_tree
+    lnks = nt.links
+
+    # 1. normal_map  (bitmap)
+    if "normal_map" in shader_group.inputs and shader_group.inputs["normal_map"].is_linked:
+        src = shader_group.inputs["normal_map"].links[0].from_node
+        if "normal_map" in vec_node.inputs and not vec_node.inputs["normal_map"].is_linked:
+            lnks.new(src.outputs["Color"], vec_node.inputs["normal_map"])
+
+    # 2. normal_detail_map  (bitmap)
+    if ("normal_detail_map" in shader_group.inputs
+            and shader_group.inputs["normal_detail_map"].is_linked):
+        src = shader_group.inputs["normal_detail_map"].links[0].from_node
+        if ("normal_detail_map" in vec_node.inputs
+                and not vec_node.inputs["normal_detail_map"].is_linked):
+            lnks.new(src.outputs["Color"], vec_node.inputs["normal_detail_map"])
+
+    # 3. detail_normals  (boolean)
+    if ("detail_normals" in shader_group.inputs
+            and "detail_normals" in vec_node.inputs):
+        vec_node.inputs["detail_normals"].default_value = (
+            shader_group.inputs["detail_normals"].default_value
+        )
 
 def read_patterned_file(filepath, material):
     with open(filepath, 'rb') as f:
@@ -382,8 +421,9 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
     # Ensure the node group exists
     node_group_name = f"{shader_name}"
     if node_group_name not in bpy.data.node_groups:
-        print(f"Node group '{node_group_name}' not found in Blender.")
-        return
+        print(f"Node group '{node_group_name}' not found in Blender, using blinn")
+        node_group_name = "srf_blinn_reflection"
+        
     
     node_group = bpy.data.node_groups[node_group_name]
     
@@ -433,6 +473,105 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
             # Extract file path and construct new path format
             texture_path = param_data['value']
             
+            
+
+            # ───────────────────────────────────────────────────────────
+            # SPECIAL CASE: reflection_map → convert cubemap to equirect
+            # ───────────────────────────────────────────────────────────
+            if param_name.lower() == "reflection_map":
+                # DDS path to face 00
+                cubemap_00 = os.path.join(
+                    h4ek_base_path, "images", f"{texture_path}_00_00.dds"
+                )
+
+                if not os.path.exists(cubemap_00):
+                    print(f"⚠ Reflection map cubemap not found: {cubemap_00}")
+                    continue
+
+                try:
+                    # -- call the helper (no blender-load; we’ll do that next)
+                    rgb_png, a_png = c2e.convert_cubemap(
+                        first_face_path=cubemap_00,
+                        rotate_deg=[90, -90, 0, 180, 180, 0],   # tweak later if you store per-material rots
+                        face_size_out=0,
+                        load_in_blender=False,
+                    )
+                except Exception as err:
+                    print(f"❌ Cubemap→equirect failed: {err}")
+                    continue
+
+                # load the 2 PNGs as Blender images
+                img_rgb   = bpy.data.images.load(rgb_png,   check_existing=True)
+                img_alpha = bpy.data.images.load(a_png,     check_existing=True)
+                img_alpha.colorspace_settings.is_data = True
+
+                # add two texture nodes
+                tex_rgb = nodes.new('ShaderNodeTexEnvironment')
+                tex_rgb.image = img_rgb
+                tex_rgb.image.colorspace_settings.name = 'Non-Color'
+                tex_rgb.location = (x_offset, y_offset)
+
+                tex_alpha_env = nodes.new('ShaderNodeTexEnvironment')
+                tex_alpha_env.image = img_alpha
+                tex_alpha_env.image.colorspace_settings.name = 'Non-Color'
+                tex_alpha_env.location = (x_offset, y_offset - 220)
+                y_offset += y_step     # keep vertical spacing consistent
+
+                # drive both with the “Reflection Map vector” node if present,
+                # otherwise fall back to the UV Map node.
+                # ── drive both Env textures from “Reflection Map vector” only ──────────
+                vec_node = next((n for n in nodes
+                                 if n.type == 'GROUP' and n.node_tree
+                                 and n.node_tree.name == "Reflection Map vector"), None)
+
+                if not vec_node:
+                    if "Reflection Map vector" in bpy.data.node_groups:
+                        vec_node = nodes.new("ShaderNodeGroup")
+                        vec_node.node_tree = bpy.data.node_groups["Reflection Map vector"]
+                        vec_node.label = "Reflection Map vector"
+                        vec_node.location = (x_offset - 240, y_offset - 80)
+                    
+                    else:
+                        print(f"⚠  Node-group ‘Reflection Map vector’ missing; "
+                              f"reflection textures not linked in material “{material.name}”.")
+                        return   # bail out—better to leave them un-hooked
+
+
+
+                # ---------------------------------------------------------------------
+                # call it immediately after vec_node is created
+                _link_existing_normals(material, vec_node, group_node)
+
+
+
+                # ──────────────────────────────────────────────────────────────────
+                #  2.  Hook its Vector output into BOTH env textures
+                # ──────────────────────────────────────────────────────────────────
+                links.new(vec_node.outputs["Vector"], tex_rgb.inputs["Vector"])
+                links.new(vec_node.outputs["Vector"], tex_alpha_env.inputs["Vector"])
+
+                # ──────────────────────────────────────────────────────────────────
+                # 3.  Pass any matching parameters into the vec_node inputs
+                #    (uses the SAME rules you already apply to the shader group)
+                # ──────────────────────────────────────────────────────────────────
+                
+
+
+                if 'reflection_map' in group_node.inputs:
+                    links.new(tex_rgb.outputs['Color'],
+                              group_node.inputs['reflection_map'])
+
+                if 'reflection_map_alpha' in group_node.inputs:
+                    links.new(tex_alpha_env.outputs['Color'],      # ← use COLOR output
+                              group_node.inputs['reflection_map_alpha'])
+
+
+                print("✅ Reflection map processed via cubemap_to_equirect.")
+                continue    # ↩︎ skip the normal bitmap branch
+            # ───────────────────────────────────────────────────────────
+            # (normal bitmap code continues below as-is)
+
+            
             # Use h4ek_base_path to form the correct texture path
             new_texture_path = os.path.join(h4ek_base_path, "images", f"{(texture_path)}_00_00.dds") 
 
@@ -461,10 +600,20 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
             tex_node.image = image
             tex_node.location = (x_offset, y_offset)
             y_offset += y_step  # Move down for the next node
+            
+
+            if param_name in ("normal_map", "normal_detail_map"):
+                vec_node = next(
+                    (n for n in material.node_tree.nodes
+                     if n.type == 'GROUP'
+                     and n.node_tree
+                     and n.node_tree.name == "Reflection Map vector"),
+                    None
+                )
+                if vec_node and param_name in vec_node.inputs:
+                    links.new(tex_node.outputs["Color"], vec_node.inputs[param_name])
+
             print(f"✅ Texture node '{tex_node.name}' created/updated at location {tex_node.location}.")
-
-
-
             # Set the curve (color space) if provided
             # curve = param_data['curve']
             # if curve:
@@ -585,6 +734,19 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
                     boolean_value = boolean_value.lower() == "true"
 
                 group_node.inputs[param_name].default_value = bool(boolean_value)  # ✅ Explicitly convert to boolean
+               
+            if param_name == "detail_normals":
+                vec_node = next(
+                    (n for n in material.node_tree.nodes
+                     if n.type == 'GROUP'
+                     and n.node_tree
+                     and n.node_tree.name == "Reflection Map vector"),
+                    None
+                )
+                if vec_node and "detail_normals" in vec_node.inputs:
+                    vec_node.inputs["detail_normals"].default_value = bool(boolean_value)
+
+
                 print(f"✅ Set boolean parameter '{param_name}' to {boolean_value}")
 
         elif param_data['type'] == 'int':
