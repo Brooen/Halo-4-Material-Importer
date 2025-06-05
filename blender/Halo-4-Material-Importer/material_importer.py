@@ -611,7 +611,12 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
                     None
                 )
                 if vec_node and param_name in vec_node.inputs:
-                    links.new(tex_node.outputs["Color"], vec_node.inputs[param_name])
+                    # avoid duplicate links
+                    if not vec_node.inputs[param_name].is_linked:
+                        material.node_tree.links.new(
+                            tex_node.outputs['Color'],
+                            vec_node.inputs[param_name]
+                        )
 
             print(f"✅ Texture node '{tex_node.name}' created/updated at location {tex_node.location}.")
             # Set the curve (color space) if provided
@@ -727,24 +732,25 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
 
         elif param_data['type'] == 'boolean':
             if param_name in group_node.inputs.keys():
-                boolean_value = param_data['value']
-
-                # ✅ Ensure the value is a real boolean (not a string)
+                # always define boolean_value
+                boolean_value = param_data.get('value', False)
                 if isinstance(boolean_value, str):
                     boolean_value = boolean_value.lower() == "true"
 
-                group_node.inputs[param_name].default_value = bool(boolean_value)  # ✅ Explicitly convert to boolean
-               
-            if param_name == "detail_normals":
-                vec_node = next(
-                    (n for n in material.node_tree.nodes
-                     if n.type == 'GROUP'
-                     and n.node_tree
-                     and n.node_tree.name == "Reflection Map vector"),
-                    None
-                )
-                if vec_node and "detail_normals" in vec_node.inputs:
-                    vec_node.inputs["detail_normals"].default_value = bool(boolean_value)
+                group_node.inputs[param_name].default_value = bool(boolean_value)
+
+                # ── feed detail_normals into the Reflection Map vector ──
+                if param_name == "detail_normals":
+                    vec_node = next(
+                        (n for n in material.node_tree.nodes
+                         if n.type == 'GROUP'
+                         and n.node_tree
+                         and n.node_tree.name == "Reflection Map vector"),
+                        None
+                    )
+                    if vec_node and "detail_normals" in vec_node.inputs:
+                        vec_node.inputs["detail_normals"].default_value = bool(boolean_value)
+
 
 
                 print(f"✅ Set boolean parameter '{param_name}' to {boolean_value}")
