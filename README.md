@@ -12,3 +12,6 @@ Note: This tool **only** works with [Reclaimer](https://github.com/Gravemind2401
 [Latest Release](https://github.com/Brooen/Halo-4-Material-Importer/releases/latest)
 
 [Latest Test Build](https://github.com/Brooen/Halo-4-Material-Importer/raw/refs/heads/main/blender/Halo-4-Material-Importer.zip)
+
+## Credits
+Chiefster - Making all of the shaders
