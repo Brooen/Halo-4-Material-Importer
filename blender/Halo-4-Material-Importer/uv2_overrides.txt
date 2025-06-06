@@ -1,0 +1,2 @@
+srf_ca_special_blinn_tintable_alphamask_uv2 :: alpha_map
+srf_blinn_detail_uv2 :: color_detail_map

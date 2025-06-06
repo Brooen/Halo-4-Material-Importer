@@ -1,6 +1,8 @@
 import bpy
 import struct
 import os
+import collections
+import re
 # ───────── Cubemap helper import (works in every load context) ─────────
 try:
     # 1) Normal package-relative import (when __package__ is set)
@@ -15,7 +17,18 @@ except ImportError:
     sys.modules["cubemap_to_equirect"] = c2e   # optional: so others can import it
 # -----------------------------------------------------------------------
 
+UV2_TABLE = set()
+_cfg_path = os.path.join(os.path.dirname(__file__), "uv2_overrides.txt")
 
+if os.path.exists(_cfg_path):
+    with open(_cfg_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            m = re.match(r"\s*([\w:]+)\s*::\s*([\w:]+)", line)
+            if m:
+                UV2_TABLE.add((m.group(1).lower(), m.group(2).lower()))
+else:
+    print(f"[INFO] No uv2_overrides.txt found in {os.path.dirname(__file__)} "
+          "(UV-1 will be used for all inputs).")
 
 class MaterialParameter:
     BITMAP = 0
@@ -83,6 +96,43 @@ def _link_existing_normals(mat, vec_node, shader_group):
     if "reflection_normal" in shader_group.inputs and "reflection_normal" in vec_node.inputs:
         vec_node.inputs["reflection_normal"].default_value = shader_group.inputs["reflection_normal"].default_value
 
+# ── helper: append one line to <addon>/missing_shaders.txt ─────────────
+_missing_counter = {}   # {shader_name: count}
+
+def _log_missing_shader(shader_name: str):
+    """Record one fallback to srf_blinn.
+
+    On every call we update the in-memory counter **and**
+    rewrite <addon>/missing_shaders.txt from scratch.
+    """
+    # bump session counter
+    _missing_counter[shader_name] = _missing_counter.get(shader_name, 0) + 1
+
+    # path inside the add-on folder
+    log_path = os.path.join(os.path.dirname(__file__), "missing_shaders.txt")
+
+    # overwrite the file each time
+    with open(log_path, "w", encoding="utf-8") as fh:
+        for name, cnt in _missing_counter.items():
+            fh.write(f"{name:30s} {cnt}\n")
+
+    print(f"[WARN] Shader '{shader_name}' not found – recorded ({_missing_counter[shader_name]}) in {log_path}")
+# -----------------------------------------------------------------------
+
+def get_uv_node(mat, uv_name: str):
+    """
+    Return a ShaderNodeUVMap set to *uv_name*.
+    Re-uses an existing node if one already exists in the material.
+    """
+    for n in mat.node_tree.nodes:
+        if n.type == 'UVMAP' and n.uv_map == uv_name:
+            return n
+    # create a new one
+    n = mat.node_tree.nodes.new("ShaderNodeUVMap")
+    n.uv_map  = uv_name
+    n.label   = f"UV {uv_name}"
+    n.location = (-400, -200 if uv_name.endswith(".001") else -100)
+    return n
 
 def read_patterned_file(filepath, material):
     with open(filepath, 'rb') as f:
@@ -422,6 +472,7 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
     # Ensure the node group exists
     node_group_name = f"{shader_name}"
     if node_group_name not in bpy.data.node_groups:
+        _log_missing_shader(node_group_name) 
         print(f"Node group '{node_group_name}' not found in Blender, using blinn")
         node_group_name = "srf_blinn_reflection"
         
@@ -436,11 +487,7 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
     nodes.clear()
 
     # Create a UV Map node
-    uv_map_node = nodes.new('ShaderNodeUVMap')
-    uv_map_node.name = "UV Map"
-    uv_map_node.label = "UV Map"
-    uv_map_node.uv_map = "UVMap"  # Set to the default UV map or change to the appropriate UV map name
-    uv_map_node.location = (-600, 0)
+
 
     # Add the node group to the material's node tree
     group_node = nodes.new('ShaderNodeGroup')
@@ -671,6 +718,15 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
                 mapping_node.inputs['Location'].default_value[0] = offset_x  # X
                 mapping_node.inputs['Location'].default_value[1] = offset_y  # Y
                 print(f"Applied Offset: X={offset_x}, Y={offset_y}")
+            
+            
+            # decide UV set for THIS bitmap
+            use_uv2 = ((shader_name.lower(), param_name.lower()) in UV2_TABLE)
+            uv_map_name = "UVMap.001" if use_uv2 else "UVMap"
+
+            uv_map_node = get_uv_node(material, uv_map_name)
+            
+
             
             # Connect the UV Map node to the Mapping node
             links.new(uv_map_node.outputs['UV'], mapping_node.inputs['Vector'])
