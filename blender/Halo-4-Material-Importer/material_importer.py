@@ -495,6 +495,8 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
     group_node.name = shader_name
     group_node.label = shader_name
     group_node.location = (400, 0)  # Move the node group to the right
+    
+    group_inputs_lc = {sock.name.lower(): sock for sock in group_node.inputs}
 
     print(f"Setting up shader '{shader_name}' with parameters: {parameters}")
     
@@ -762,50 +764,62 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
             else:
                 print(f"Curve input '{curve_input_name}' not found in node group.")
             
-            if alpha_input_name in group_node.inputs.keys():
-                print(f"'{alpha_input_name}' exists in group node inputs. Connecting alpha...")
-                links.new(tex_node.outputs['Alpha'], group_node.inputs[alpha_input_name])
-                print(f"Connected texture node alpha output to group node input '{alpha_input_name}'.")
-                # Set alpha_connected to True if the alpha is connected to specific inputs
-                if param_name in ['surface_color_map', 'color_map']:
+            # ── ALPHA hookup (case-insensitive) ────────────────────────────────
+            alpha_input_name = f"{param_name}_alpha"
+            alpha_sock = group_inputs_lc.get(alpha_input_name.lower())
+
+            if alpha_sock:
+                # link only if the socket is free
+                if not alpha_sock.is_linked:
+                    links.new(tex_node.outputs["Alpha"], alpha_sock)
+                    print(f"Connected ALPHA of '{param_name}' → socket '{alpha_sock.name}'")
+
+                # mark alpha-connected for blend-mode adjustment
+                if param_name.lower() in ("surface_color_map", "color_map"):
                     alpha_connected = True
-                    print(f"Alpha connected for '{param_name}', setting material blend method to 'BLEND'.")
             else:
-                print(f"Alpha input '{alpha_input_name}' not found in node group inputs.")
+                print(f"Alpha socket “{alpha_input_name}” not found on node-group "
+                      f"(looked up case-insensitively).")
 
 
-                if param_name in group_node.inputs.keys():
-                    links.new(tex_node.outputs['Color'], group_node.inputs[param_name])
-                    print(f"Connected texture node to group node input '{param_name}'.")
+
+            sock = group_inputs_lc.get(param_name.lower())
+            if sock:
+                links.new(tex_node.outputs['Color'], sock)
+                print(f"Connected texture node to group node input '{param_name}'.")
 
         elif param_data['type'] == 'color':
-            if param_name in group_node.inputs.keys():
-                try:
-                    # Convert ARGB (A, R, G, B) → RGBA (R, G, B, A)
-                    argb = param_data['value']
+            # 1) find the socket by LOWER-cased name
+            sock = group_inputs_lc.get(param_name.lower())
+            if not sock:
+                print(f"[WARN] Color param “{param_name}” not found on node-group "
+                      f"({shader_name}); skipped.")
+                continue
 
-                    # Ensure we have exactly 4 values (ARGB)
-                    if isinstance(argb, tuple) and len(argb) == 4:
-                        rgba = (argb[1], argb[2], argb[3], argb[0])  # Convert ARGB to RGBA
-                        group_node.inputs[param_name].default_value = rgba
-                        print(f"Set color parameter '{param_name}' to {rgba} (Converted from ARGB: {argb})")
-                    else:
-                        print(f"WARNING: Invalid ARGB format for '{param_name}': {argb}. Expected 4 values.")
+            try:
+                # Convert ARGB (A,R,G,B) → RGBA (R,G,B,A)
+                argb = param_data['value']
 
-                    # Set the color in Blender
-                    group_node.inputs[param_name].default_value = rgba
-                    print(f"Set color parameter '{param_name}' to {rgba} (Converted from ARGB: {argb})")
+                if isinstance(argb, tuple) and len(argb) == 4:
+                    rgba = (argb[1], argb[2], argb[3], argb[0])
+                    sock.default_value = rgba
+                    print(f"Set color {param_name} → {rgba}  (from ARGB {argb})")
+                else:
+                    print(f"WARNING: Invalid ARGB for '{param_name}': {argb}")
 
-                except TypeError:
-                    # If a single float is expected, use the red channel
-                    group_node.inputs[param_name].default_value = argb[1]  # Use the red component
-                    print(f"Color parameter '{param_name}' expected a float, setting to red component: {argb[1]}")
+            except TypeError:
+                # single-float sockets (rare): use the red channel
+                sock.default_value = argb[1]
+                print(f"Color {param_name} expected float; set to red {argb[1]}")
 
 
         elif param_data['type'] == 'real':
             # --- existing code that feeds the main shader ---
             if param_name in group_node.inputs.keys():
-                group_node.inputs[param_name].default_value = float(param_data['value'])
+                sock = group_inputs_lc.get(param_name.lower())
+                if sock:
+                    sock.default_value = float(param_data["value"])
+
 
             # --- NEW: pipe reflection_normal into the vector node ---
             if param_name == "reflection_normal":
@@ -826,7 +840,10 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
                 if isinstance(boolean_value, str):
                     boolean_value = boolean_value.lower() == "true"
 
-                group_node.inputs[param_name].default_value = bool(boolean_value)
+                sock = group_inputs_lc.get(param_name.lower())
+                if sock:
+                    sock.default_value = bool(boolean_value)
+
 
                 # ── feed detail_normals into the Reflection Map vector ──
                 if param_name == "detail_normals":
