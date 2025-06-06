@@ -454,30 +454,30 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
     blend_mode = float(parameters.get("Blend Mode", {}).get("value", 1.0))
     tsp_value = float(parameters.get("TSP", {}).get("value", 1.0))
     
-    if "Blend Mode [0 Opaque, .5 Additive, 1 Alpha Blend]" in group_node.inputs.keys():
-        group_node.inputs["Blend Mode [0 Opaque, .5 Additive, 1 Alpha Blend]"].default_value = float(blend_mode)
+    if "0 Opaque, .5 Additive, 1 Alpha Blend" in group_node.inputs.keys():
+        group_node.inputs["0 Opaque, .5 Additive, 1 Alpha Blend"].default_value = float(blend_mode)
     
-    if "Cast shadows? [0-1]" in group_node.inputs:
+    if "cull shadows" in group_node.inputs:
 
         # `blend_mode` should already hold the string for this material
         # e.g. 'opaque', 'alpha_test', 'transparent', …
-        if blend_mode == "opaque":
+        if blend_mode == 0:
             # keep the value coming from the TSP (0 or 1)
-            group_node.inputs["Cast shadows? [0-1]"].default_value = int(tsp_value)
+            group_node.inputs["cull shadows"].default_value = 1
         else:
             # non-opaque materials always cast shadows
-            group_node.inputs["Cast shadows? [0-1]"].default_value = 1
+            group_node.inputs["cull shadows"].default_value = int(tsp_value)
             
-    if "Show backfaces? [0-1]" in group_node.inputs:
+    if "material is two-sided" in group_node.inputs:
 
         # `blend_mode` should already hold the string for this material
         # e.g. 'opaque', 'alpha_test', 'transparent', …
-        if blend_mode == "opaque":
+        if blend_mode == 0:
             # keep the value coming from the TSP (0 or 1)
-            group_node.inputs["Show backfaces? [0-1]"].default_value = int(tsp_value)
+            group_node.inputs["material is two-sided"].default_value = 1
         else:
             # non-opaque materials always cast shadows
-            group_node.inputs["Show backfaces? [0-1]"].default_value = 1
+            group_node.inputs["material is two-sided"].default_value = int(tsp_value)
 
     
     # Set the initial positions for nodes
