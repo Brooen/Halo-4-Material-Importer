@@ -3,6 +3,7 @@ import struct
 import os
 import collections
 import re
+import importlib.util, sys
 # ───────── Cubemap helper import (works in every load context) ─────────
 try:
     # 1) Normal package-relative import (when __package__ is set)
@@ -62,6 +63,26 @@ class SharpenMode:
 class ExternMode:
     VALUES = ["use_bitmap_as_normal", "albedo_buffer", "normal_buffer", "dynamic_UI", "depth_camera"]
 
+# ── helper: dynamic load of a one-off shader module ───────────────────
+_ONEOFF_DIR = os.path.join(os.path.dirname(__file__), "oneoffs")
+
+def _load_oneoff(shader_name: str):
+    """Return a module object if <oneoffs/<base>.py> exists; else None."""
+    # strip any extension (e.g. '.material') so we match 'surface_hard_light'
+    base = os.path.splitext(shader_name)[0]
+    fp   = os.path.join(_ONEOFF_DIR, f"{base}.py")
+    if not os.path.isfile(fp):
+        return None
+    spec = importlib.util.spec_from_file_location(base, fp)
+    mod  = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as exc:
+        print(f"[ERROR] Failed to load one-off '{base}': {exc}")
+        return None
+
+
 def get_shader_name(shader: str) -> str:
     """Extracts the shader name by removing everything before the last '\\'."""
     return shader.split("\\")[-1]  # Takes only the last part after the last backslash
@@ -114,7 +135,7 @@ def _log_missing_shader(shader_name: str):
     # overwrite the file each time
     with open(log_path, "w", encoding="utf-8") as fh:
         for name, cnt in _missing_counter.items():
-            fh.write(f"{name:30s} {cnt}\n")
+            fh.write(f"{name:50s} {cnt}\n")
 
     print(f"[WARN] Shader '{shader_name}' not found – recorded ({_missing_counter[shader_name]}) in {log_path}")
 # -----------------------------------------------------------------------
@@ -131,8 +152,18 @@ def get_uv_node(mat, uv_name: str):
     n = mat.node_tree.nodes.new("ShaderNodeUVMap")
     n.uv_map  = uv_name
     n.label   = f"UV {uv_name}"
-    n.location = (-400, -200 if uv_name.endswith(".001") else -100)
+    n.location = (-800, -220 if uv_name.endswith(".001") else -100)
     return n
+
+# helper (leave near the top of the file)
+def ensure_nonzero_scale(map_node):
+    """Replace any 0 component of the Mapping node’s Scale with 1."""
+    if map_node and map_node.type == 'MAPPING':
+        scale_sock = map_node.inputs['Scale'].default_value
+        for i in range(3):                       # X, Y, Z
+            if scale_sock[i] == 0:
+                scale_sock[i] = 1
+
 
 def read_patterned_file(filepath, material):
     with open(filepath, 'rb') as f:
@@ -486,8 +517,23 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
     # Clear existing nodes
     nodes.clear()
 
-    # Create a UV Map node
-
+    # ───────────────── one-off override ───────────────────────────────
+    oneoff_mod = _load_oneoff(shader_name)
+    if oneoff_mod and hasattr(oneoff_mod, "build_material"):
+        print(f"[INFO] Using one-off handler for shader '{shader_name}'")
+        try:
+            # hand over everything the module might need
+            oneoff_mod.build_material(
+                material      = material,         # bpy.types.Material
+                params        = parameters,       # dict you already parsed
+                context       = bpy.context,   
+                h4ek_base_path   = h4ek_base_path,             # in case it needs scene info
+                addon_directory = addon_directory
+            )
+            return material   # skip the default pipeline
+        except Exception as exc:
+            print(f"[ERROR] One-off '{shader_name}' failed: {exc} – falling back.")
+    # ───────────────────────────────────────────────────────────────────
 
     # Add the node group to the material's node tree
     group_node = nodes.new('ShaderNodeGroup')
@@ -584,9 +630,10 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
                 tex_alpha_env = nodes.new('ShaderNodeTexEnvironment')
                 tex_alpha_env.image = img_alpha
                 tex_alpha_env.image.colorspace_settings.name = 'Non-Color'
-                tex_alpha_env.location = (x_offset, y_offset - 220)
-                y_offset += y_step     # keep vertical spacing consistent
-
+                tex_alpha_env.location = (x_offset, y_offset - 230)
+                y_offset += y_step - 170    # keep vertical spacing consistent
+                
+                
                 # drive both with the “Reflection Map vector” node if present,
                 # otherwise fall back to the UV Map node.
                 # ── drive both Env textures from “Reflection Map vector” only ──────────
@@ -599,7 +646,7 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
                         vec_node = nodes.new("ShaderNodeGroup")
                         vec_node.node_tree = bpy.data.node_groups["Reflection Map vector"]
                         vec_node.label = "Reflection Map vector"
-                        vec_node.location = (x_offset - 240, y_offset - 80)
+                        vec_node.location = (x_offset - 300, y_offset + 80)
                     
                     else:
                         print(f"⚠  Node-group ‘Reflection Map vector’ missing; "
@@ -708,6 +755,7 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
             mapping_node.label = f"{param_name}_Mapping"
             mapping_node.location = (x_offset - 300, y_offset + 150)  # Place above and to the left of the texture node
 
+
             # Check if scale and offset exist
             if "Scale" in param_data['extra']:
                 scale_x, scale_y = param_data['extra']["Scale"]
@@ -720,7 +768,8 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
                 mapping_node.inputs['Location'].default_value[0] = offset_x  # X
                 mapping_node.inputs['Location'].default_value[1] = offset_y  # Y
                 print(f"Applied Offset: X={offset_x}, Y={offset_y}")
-            
+
+            ensure_nonzero_scale(mapping_node)            
             
             # decide UV set for THIS bitmap
             use_uv2 = ((shader_name.lower(), param_name.lower()) in UV2_TABLE)
@@ -747,22 +796,27 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
                 print(f"Connected texture node color output to group node input '{param_name}'.")
             alpha_input_name = f"{param_name}_alpha"
             print(f"Checking for alpha input '{alpha_input_name}' in node group...")
+            
+            # ── CURVE hookup (case-insensitive) ───────────────────────────────
             curve_input_name = f"{param_name}_curve"
-            if curve_input_name in group_node.inputs.keys():
-                print(f"'{curve_input_name}' exists in group node inputs. Fetching curve value...")
+            curve_sock = group_inputs_lc.get(curve_input_name.lower())
+
+            if curve_sock:
+                print(f"'{curve_sock.name}' socket found – fetching curve value …")
 
                 # Load bitmap.db once and store the index
                 bitmap_index, all_paths = load_bitmap_db(addon_directory)
 
-                # Use the preloaded index for fast lookups
+                # Use the preloaded index for fast look-ups
                 curve_value = get_curve_from_db(texture_path, bitmap_index, all_paths)
 
                 # Set the curve value
-                group_node.inputs[curve_input_name].default_value = curve_value
-                print(f"✅ Set curve parameter '{curve_input_name}' to {curve_value}")
+                curve_sock.default_value = curve_value
+                print(f"✅ Set curve parameter '{curve_sock.name}' to {curve_value}")
 
             else:
-                print(f"Curve input '{curve_input_name}' not found in node group.")
+                print(f"Curve socket '{curve_input_name}' not found on node group "
+                      "(checked case-insensitively).")
             
             # ── ALPHA hookup (case-insensitive) ────────────────────────────────
             alpha_input_name = f"{param_name}_alpha"
