@@ -77,18 +77,21 @@ def ensure_nonzero_scale(map_node):
 # ── Main builder ─────────────────────────────────────────────────────
 
 NODE_LOCATIONS = {
-    'base_vec': (-1200, 0),
-    'fx_map_a_uv': (  -1900,  0),
-    'fx_map_a_map': ( -1700,  150),
-    'fx_map_a_tex': ( -1500,  150),
-    'fx_map_b_uv': (  -1900,  0),
-    'fx_map_b_map': ( -1700,  -200),
-    'fx_map_b_tex': ( -1500,  -200),
-    'palette_vec': (-700, 0),
-    'base_map_tex': (   -1000, 0),
-    'palette_map_tex': (-500, 0),
-    'main_group': (-200, 0),
-    'output':     (0, 0),
+    'base_vec':      (-1200, 0),
+    'fx_map_a_uv':   (-1900, 0),
+    'fx_map_a_map':  (-1700, 150),
+    'fx_map_a_tex':  (-1500, 150),
+    'fx_map_b_uv':   (-1900, 0),
+    'fx_map_b_map':  (-1700, -200),
+    'fx_map_b_tex':  (-1500, -200),
+    'palette_vec':   (-700, 0),
+    'base_map_tex':  (-1000, 0),
+    'palette_map_tex':(-500, 0),
+    'main_group':    (-200, 0),
+    'output':        (0, 0),
+    'base_map_uv': (-1900, 0),
+    'base_map_map':(-1700, -550),
+    'base_map_mapped_tex':(-1500, -550),
 }
 
 def build_material(material, params, context, h4ek_base_path, addon_directory):
@@ -101,15 +104,15 @@ def build_material(material, params, context, h4ek_base_path, addon_directory):
     nodes, links = nt.nodes, nt.links
     nodes.clear()
 
-    # load bitmaps
+    # load bitmap database
     idx, paths = load_bitmap_db(addon_directory)
 
-    # base map vector group
+    # base_map_vector group
     base_vec = nodes.new('ShaderNodeGroup')
     base_vec.node_tree = bpy.data.node_groups['surface_hard_light - base_map_vector']
     base_vec.location = loc('base_vec')
 
-    # fx_map rows
+    # fx_map_a and fx_map_b
     for i, key in enumerate(('fx_map_a', 'fx_map_b')):
         suffix = chr(97 + i)
         data = params.get(key, {})
@@ -125,7 +128,7 @@ def build_material(material, params, context, h4ek_base_path, addon_directory):
         map_node.location = loc(f'fx_map_{suffix}_map')
         sx, sy = data.get('extra', {}).get('Scale', (1, 1))
         ox, oy = data.get('extra', {}).get('Offset', (0, 0))
-        map_node.inputs['Scale'].default_value = (sx, sy, 1)
+        map_node.inputs['Scale'].default_value    = (sx, sy, 1)
         map_node.inputs['Location'].default_value = (ox, oy, 0)
         ensure_nonzero_scale(map_node)
 
@@ -133,10 +136,10 @@ def build_material(material, params, context, h4ek_base_path, addon_directory):
         tex_node.image = tex
         tex_node.location = loc(f'fx_map_{suffix}_tex')
 
-        links.new(uv.outputs['UV'], map_node.inputs['Vector'])
+        links.new(uv.outputs['UV'],         map_node.inputs['Vector'])
         links.new(map_node.outputs['Vector'], tex_node.inputs['Vector'])
-        links.new(tex_node.outputs['Color'], base_vec.inputs[key])
-        links.new(tex_node.outputs['Alpha'], base_vec.inputs[f'{key}_alpha'])
+        links.new(tex_node.outputs['Color'],  base_vec.inputs[key])
+        links.new(tex_node.outputs['Alpha'],  base_vec.inputs[f'{key}_alpha'])
 
         curve = get_curve_from_db(data.get('value'), idx, paths)
         if f'{key}_curve' in base_vec.inputs:
@@ -146,24 +149,42 @@ def build_material(material, params, context, h4ek_base_path, addon_directory):
     if 'distortion_strength' in params and 'distortion_strength' in base_vec.inputs:
         base_vec.inputs['distortion_strength'].default_value = float(params['distortion_strength']['value'])
 
-    # palette map vector group
+    # palette_map_vector group
     pal_vec = nodes.new('ShaderNodeGroup')
     pal_vec.node_tree = bpy.data.node_groups['surface_hard_light - palette_map_vector']
     pal_vec.location = loc('palette_vec')
     links.new(base_vec.outputs['fxMapValue'], pal_vec.inputs['fxMapValue'])
     if 'base_map_curve' in params and 'base_map_curve' in pal_vec.inputs:
-        curve = get_curve_from_db(params['base_map_curve']['value'], idx, paths)
-        pal_vec.inputs['base_map_curve'].default_value = curve
+        pal_vec.inputs['base_map_curve'].default_value = get_curve_from_db(params['base_map_curve']['value'], idx, paths)
 
-    # base_map texture
-    base_map = params.get('base_map', {})
-    tex_b = _make_tex(base_map.get('value'), h4ek_base_path)
+    # original base_map: color for palette
+    base_map_data = params.get('base_map', {})
+    tex_b = _make_tex(base_map_data.get('value'), h4ek_base_path)
     if tex_b:
-        tn = nodes.new('ShaderNodeTexImage')
-        tn.image = tex_b
-        tn.location = loc('base_map_tex')
-        links.new(base_vec.outputs['base_map_vector'], tn.inputs['Vector'])
-        links.new(tn.outputs['Color'], pal_vec.inputs['base_map'])
+        tn_col = nodes.new('ShaderNodeTexImage')
+        tn_col.image = tex_b
+        tn_col.location = loc('base_map_tex')
+        links.new(base_vec.outputs['base_map_vector'], tn_col.inputs['Vector'])
+        links.new(tn_col.outputs['Color'], pal_vec.inputs['base_map'])
+
+        # new base_map with mapping, feeding base_map_alpha
+        uv_b = get_uv_node(mat, 'UVMap')
+        uv_b.location = loc('base_map_uv')
+
+        map_b = nodes.new('ShaderNodeMapping')
+        map_b.vector_type = 'POINT'
+        map_b.location = loc('base_map_map')
+        sx, sy = base_map_data.get('extra', {}).get('Scale', (1, 1))
+        ox, oy = base_map_data.get('extra', {}).get('Offset', (0, 0))
+        map_b.inputs['Scale'].default_value    = (sx, sy, 1)
+        map_b.inputs['Location'].default_value = (ox, oy, 0)
+        ensure_nonzero_scale(map_b)
+
+        tn_map = nodes.new('ShaderNodeTexImage')
+        tn_map.image = tex_b
+        tn_map.location = loc('base_map_mapped_tex')
+        links.new(uv_b.outputs['UV'],        map_b.inputs['Vector'])
+        links.new(map_b.outputs['Vector'],   tn_map.inputs['Vector'])
 
     # palette_map texture
     pal_map = params.get('palette_map', {})
@@ -178,12 +199,15 @@ def build_material(material, params, context, h4ek_base_path, addon_directory):
     main = nodes.new('ShaderNodeGroup')
     main.node_tree = bpy.data.node_groups['surface_hard_light']
     main.location = loc('main_group')
+
+    # connect new base_map alpha
     if tex_b and 'base_map_alpha' in main.inputs:
-        links.new(tn.outputs['Alpha'], main.inputs['base_map_alpha'])
+        links.new(tn_map.outputs['Alpha'], main.inputs['base_map_alpha'])
+
     if tex_p and 'palette_map' in main.inputs:
         links.new(tn2.outputs['Color'], main.inputs['palette_map'])
 
-    # blend, shadows, two-sided
+    # blend mode, shadows, two-sided
     blend = float(params.get('Blend Mode', {}).get('value', 1.0))
     if '0 Opaque, .5 Additive, 1 Alpha Blend' in main.inputs:
         main.inputs['0 Opaque, .5 Additive, 1 Alpha Blend'].default_value = blend
@@ -212,4 +236,3 @@ def build_material(material, params, context, h4ek_base_path, addon_directory):
     mat.use_backface_culling = False
 
     print('surface_hard_light built.')
-
