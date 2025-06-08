@@ -220,6 +220,10 @@ def read_patterned_file(filepath, material):
                 offset = struct.unpack('<2f', f.read(8))
                 f.seek(6, 1)
                 filter_mode, wrap_mode, wrap_mode_u, wrap_mode_v, sharpen_mode, extern_mode = struct.unpack('<6H', f.read(12))
+                parameters[-1]['wrap_mode']   = wrap_mode
+                parameters[-1]['wrap_mode_u'] = wrap_mode_u
+                parameters[-1]['wrap_mode_v'] = wrap_mode_v
+                
                 parameters[-1]['data'].extend([
                     f"Type: Bitmap",
                     f"Scale: {scale}", f"Offset: {offset}",
@@ -457,7 +461,9 @@ def process_material(filepath, material, h4ek_base_path, addon_directory):
                     else:
                         # Store extra data like "Wrap Mode", "Filter Mode", etc.
                         extra_data[key] = value
-
+        if 'wrap_mode'   in param: extra_data['wrap_mode']   = param['wrap_mode']
+        if 'wrap_mode_u' in param: extra_data['wrap_mode_u'] = param['wrap_mode_u']
+        if 'wrap_mode_v' in param: extra_data['wrap_mode_v'] = param['wrap_mode_v']
         # If the extracted name and value are valid, store them in structured_parameters
         if param_name:
             structured_parameters[param_name] = {
@@ -745,7 +751,7 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
                     # curve = "sRGB"
                 # tex_node.image.colorspace_settings.name = curve
             # print(f"Color space set to: {tex_node.image.colorspace_settings.name}")
-            
+
             tex_node.image.alpha_mode = 'CHANNEL_PACKED'
             tex_node.image.colorspace_settings.name = 'Linear Rec.709'
             
@@ -784,8 +790,27 @@ def create_shader_in_blender(shader_name, parameters, material, h4ek_base_path, 
             print(f"Connected UV Map node to mapping node.")
 
             # Connect the mapping node to the texture node
-            links.new(mapping_node.outputs['Vector'], tex_node.inputs['Vector'])
-            print(f"Connected mapping node to texture node.")
+            # create the wrap_modes node-group
+            wrap_node = nodes.new('ShaderNodeGroup')
+            wrap_node.node_tree = bpy.data.node_groups['wrap_modes']
+            wrap_node.name = f"{param_name}_wrap_modes"
+            wrap_node.label = "wrap_modes"
+
+            # position it halfway between mapping and texture
+            wrap_node.location = (
+                (mapping_node.location.x + tex_node.location.x) / 2,
+                mapping_node.location.y
+            )
+            extra = param_data.get('extra', {})
+            # pull the ints straight off our parsed data
+            wrap_node.inputs['wrap_mode'].default_value   = extra.get('wrap_mode',   0)
+            wrap_node.inputs['wrap_mode_u'].default_value = extra.get('wrap_mode_u', 0)
+            wrap_node.inputs['wrap_mode_v'].default_value = extra.get('wrap_mode_v', 0)
+
+            # re-route the vector
+            links.new(mapping_node.outputs['Vector'], wrap_node.inputs['Vector'])
+            links.new(wrap_node.outputs['Vector'],    tex_node.inputs['Vector'])
+            # ─────────────────────────────────────────────────────────────────
             
             # Check if the node group has an _alpha input
             
